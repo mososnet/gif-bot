@@ -7,114 +7,20 @@ from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTyp
 UPLOAD_FOLDER = 'static/gifs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def is_video_portrait(input_path):
-    """يرجع True إذا الفيديو طولي (ارتفاع أكبر من العرض)"""
-    cmd = [
-        'ffprobe', '-v', 'error', '-select_streams', 'v:0',
-        '-show_entries', 'stream=width,height',
-        '-of', 'csv=s=x:p=0', input_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return False
-    try:
-        width, height = map(int, result.stdout.strip().split('x'))
-        return height > width
-    except Exception:
-        return False
-
-def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, start=0, duration=5, max_size_mb=2.45):
-    # تحديد fps حسب مدة الفيديو (تعديل تلقائي لتقليل الحجم)
-    if duration <= 3:
-        fps = 15
-    elif duration <= 6:
-        fps = 12
-    else:
-        fps = 10
-    fps = min(fps, 15)
-
-    portrait = is_video_portrait(input_path)
-
-    base_filter = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000'
-
-    if portrait:
-        filter_chain = f'{base_filter},hflip,fps={fps}'
-    else:
-        filter_chain = f'{base_filter},fps={fps}'
-
-    palette_path = os.path.join(tempfile.gettempdir(), "palette.png")
-
-    # إنشاء لوحة ألوان
-    palette_cmd = [
+def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, start=0, duration=5, fps=10):
+    command = [
         'ffmpeg',
         '-ss', str(start),
         '-t', str(duration),
         '-i', input_path,
-        '-vf', filter_chain + ',palettegen',
-        '-y',
-        palette_path
-    ]
-    result = subprocess.run(palette_cmd, capture_output=True)
-    if result.returncode != 0:
-        raise Exception(f"ffmpeg palettegen error: {result.stderr.decode()}")
-
-    # صنع الـ GIF باستخدام اللوحة
-    gif_cmd = [
-        'ffmpeg',
-        '-ss', str(start),
-        '-t', str(duration),
-        '-i', input_path,
-        '-i', palette_path,
-        '-lavfi', filter_chain + '[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5',
+        '-vf', f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps={fps}',
         '-gifflags', '+transdiff',
         '-y',
         output_path
     ]
-    result = subprocess.run(gif_cmd, capture_output=True)
+    result = subprocess.run(command, capture_output=True)
     if result.returncode != 0:
-        raise Exception(f"ffmpeg gif creation error: {result.stderr.decode()}")
-
-    size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    attempt = 0
-    while size_mb > max_size_mb and fps > 5 and attempt < 3:
-        fps -= 2
-        if portrait:
-            filter_chain = f'{base_filter},hflip,fps={fps}'
-        else:
-            filter_chain = f'{base_filter},fps={fps}'
-
-        palette_cmd = [
-            'ffmpeg',
-            '-ss', str(start),
-            '-t', str(duration),
-            '-i', input_path,
-            '-vf', filter_chain + ',palettegen',
-            '-y',
-            palette_path
-        ]
-        result = subprocess.run(palette_cmd, capture_output=True)
-        if result.returncode != 0:
-            raise Exception(f"ffmpeg palettegen error: {result.stderr.decode()}")
-
-        gif_cmd = [
-            'ffmpeg',
-            '-ss', str(start),
-            '-t', str(duration),
-            '-i', input_path,
-            '-i', palette_path,
-            '-lavfi', filter_chain + '[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5',
-            '-gifflags', '+transdiff',
-            '-y',
-            output_path
-        ]
-        result = subprocess.run(gif_cmd, capture_output=True)
-        if result.returncode != 0:
-            raise Exception(f"ffmpeg gif creation error: {result.stderr.decode()}")
-
-        size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        attempt += 1
-
-    return size_mb
+        raise Exception(f"ffmpeg error: {result.stderr.decode()}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -158,20 +64,27 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await file.download_to_drive(input_path)
 
+        # القيم من أمر /convert لو موجودة، أو القيم الافتراضية
         start_sec = context.user_data.get('start_sec', 0)
         end_sec = context.user_data.get('end_sec', start_sec + 5)
         duration_sec = end_sec - start_sec
         if duration_sec <= 0:
-            duration_sec = 5
+            duration_sec = 5  # fallback لو حصل خطأ
+
+        gif_fps = 10
+        gif_width = 320
+        gif_height = 320
 
         try:
-            size_mb = convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320,
-                                                  start=start_sec, duration=duration_sec, max_size_mb=2.45)
+            convert_video_to_gif_ffmpeg(input_path, output_path, width=gif_width, height=gif_height,
+                                       start=start_sec, duration=duration_sec, fps=gif_fps)
+            size_mb = os.path.getsize(output_path) / (1024 * 1024)
             with open(output_path, 'rb') as gif_file:
                 await update.message.reply_animation(gif_file, caption=f"✅ تم الإنشاء بحجم {size_mb:.2f} ميجابايت.")
         except Exception as e:
             await update.message.reply_text(f"حدث خطأ أثناء التحويل: {e}")
 
+        # نمسح الأوقات بعد استخدام المقطع عشان ما تتكرر على فيديو ثاني
         context.user_data.pop('start_sec', None)
         context.user_data.pop('end_sec', None)
 
