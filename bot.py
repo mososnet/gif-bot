@@ -51,7 +51,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("أرسل فيديو فقط.")
         return
 
-    # تحميل الفيديو مؤقتًا
     file_id = video.file_id
     file = await context.bot.get_file(file_id)
     unique_name = tempfile.NamedTemporaryFile(delete=True).name
@@ -59,7 +58,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output_path = f"{unique_name}.gif"
     await file.download_to_drive(input_path)
 
-    # معطيات افتراضية، ممكن تغيرها أو تخلي المستخدم يحددها لاحقاً
     width, height = 320, 240
     start, end = 0, 5  # أول 5 ثواني
     max_size = 5  # ميجابايت
@@ -76,16 +74,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حدث خطأ أثناء المعالجة: {e}")
 
     finally:
-        # حذف الملفات المؤقتة
         if os.path.exists(input_path):
             os.remove(input_path)
         if os.path.exists(output_path):
             os.remove(output_path)
 
 if __name__ == '__main__':
-    from telegram.ext import ApplicationBuilder
-
-    BOT_TOKEN = "YOUR_BOT_TOKEN"
+    BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
