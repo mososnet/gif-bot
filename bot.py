@@ -1,15 +1,11 @@
 import os
 import tempfile
 import subprocess
-import asyncio
-from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 
 UPLOAD_FOLDER = 'static/gifs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-BOT_TOKEN = "7973939667:AAFRZP8Sv_qqgO-JHyNM2Tnmsp1X8_WZ0Yk"
 
 def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, start=0, duration=5, fps=10):
     command = [
@@ -68,53 +64,37 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await file.download_to_drive(input_path)
 
+        # القيم من أمر /convert لو موجودة، أو القيم الافتراضية
         start_sec = context.user_data.get('start_sec', 0)
         end_sec = context.user_data.get('end_sec', start_sec + 5)
-        duration_sec = max(end_sec - start_sec, 1)
+        duration_sec = end_sec - start_sec
+        if duration_sec <= 0:
+            duration_sec = 5  # fallback لو حصل خطأ
+
+        gif_fps = 10
+        gif_width = 320
+        gif_height = 320
 
         try:
-            convert_video_to_gif_ffmpeg(input_path, output_path,
-                                        width=320, height=320,
-                                        start=start_sec, duration=duration_sec, fps=10)
+            convert_video_to_gif_ffmpeg(input_path, output_path, width=gif_width, height=gif_height,
+                                       start=start_sec, duration=duration_sec, fps=gif_fps)
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
             with open(output_path, 'rb') as gif_file:
                 await update.message.reply_animation(gif_file, caption=f"✅ تم الإنشاء بحجم {size_mb:.2f} ميجابايت.")
         except Exception as e:
             await update.message.reply_text(f"حدث خطأ أثناء التحويل: {e}")
 
+        # نمسح الأوقات بعد استخدام المقطع عشان ما تتكرر على فيديو ثاني
         context.user_data.pop('start_sec', None)
         context.user_data.pop('end_sec', None)
 
-# AIOHTTP web server for Render
-async def handle_root(request):
-    return web.Response(text="🤖 Telegram bot is running.")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_root)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, port=8080)
-    await site.start()
-    print("🌐 Web server running on port 8080.")
-
-# Main app logic
-async def main():
-    # Telegram bot
-    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CommandHandler("convert", convert_command))
-    bot_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
-
-    await start_web_server()
-    await bot_app.initialize()
-    await bot_app.start()
-    print("🤖 Telegram bot running...")
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await bot_app.stop()
-        await bot_app.shutdown()
-
 if __name__ == '__main__':
-    asyncio.run(main())
+    BOT_TOKEN = "7973939667:AAFRZP8Sv_qqgO-JHyNM2Tnmsp1X8_WZ0Yk"
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("convert", convert_command))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+
+    print("البوت شغّال...")
+    app.run_polling()
