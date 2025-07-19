@@ -1,46 +1,71 @@
 import os
 import tempfile
 import cv2
-import moviepy.editor as mpy
+import subprocess
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 
 UPLOAD_FOLDER = 'static/gifs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def add_blur_background(video_path, width, height):
-    clip = mpy.VideoFileClip(video_path)
+def add_blur_background(input_path, width, height, output_path):
+    cap = cv2.VideoCapture(input_path)
+    ret, frame = cap.read()
+    cap.release()
 
-    if clip.h <= clip.w:
-        return clip.resize(newsize=(width, height))  # فيديو عرضي، نعدله فقط
+    if not ret:
+        raise ValueError("لم أستطع قراءة أول إطار من الفيديو")
 
-    temp_img = f"{tempfile.gettempdir()}/frame.jpg"
-    clip.save_frame(temp_img, t=0.5)
+    # حفظ الخلفية الضبابية
+    blur = cv2.GaussianBlur(frame, (99, 99), 30)
+    blur_path = f"{tempfile.gettempdir()}/blur.jpg"
+    cv2.imwrite(blur_path, blur)
 
-    img = cv2.imread(temp_img)
-    blur = cv2.GaussianBlur(img, (99, 99), 30)
-    bg_path = temp_img.replace("frame.jpg", "blur.jpg")
-    cv2.imwrite(bg_path, blur)
+    # إنشاء فيديو ضبابي باستخدام ffmpeg
+    blurred_video = f"{tempfile.gettempdir()}/blurred.mp4"
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-loop", "1",
+        "-i", blur_path,
+        "-t", "5",
+        "-vf", f"scale={width}:{height}",
+        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264",
+        blurred_video
+    ], check=True)
 
-    bg_clip = (mpy.VideoFileClip(bg_path)
-               .set_duration(clip.duration)
-               .resize((width, height)))
+    # تركيب الفيديو فوق الخلفية
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", blurred_video,
+        "-i", input_path,
+        "-filter_complex",
+        f"[1:v]scale=-1:{height}[fg];[0:v][fg]overlay=(W-w)/2:(H-h)/2",
+        "-t", "5",  # أول 5 ثواني
+        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264",
+        output_path
+    ], check=True)
 
-    fg_clip = clip.resize(height=height).set_position("center")
-
-    final = mpy.CompositeVideoClip([bg_clip, fg_clip])
-    return final
-
-def convert_to_gif(clip, output_path, max_size_mib):
+def convert_to_gif(input_path, output_gif, max_size_mib):
     fps = 10
     min_fps = 2
+
     while fps >= min_fps:
-        clip.write_gif(output_path, fps=fps)
-        size = os.path.getsize(output_path) / (1024 * 1024)
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-vf", f"fps={fps},scale=320:-1:flags=lanczos",
+            output_gif
+        ], check=True)
+
+        size = os.path.getsize(output_gif) / (1024 * 1024)
         if size <= max_size_mib:
             return fps, size
+
         fps -= 1
-    return fps, os.path.getsize(output_path) / (1024 * 1024)
+
+    return fps, os.path.getsize(output_gif) / (1024 * 1024)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("أرسل لي فيديو، وسأحوّله لك إلى صورة متحركة GIF مع خلفية ضبابية لو لازم.")
@@ -55,29 +80,27 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await context.bot.get_file(file_id)
     unique_name = tempfile.NamedTemporaryFile(delete=True).name
     input_path = f"{unique_name}.mp4"
-    output_path = f"{unique_name}.gif"
+    blurred_path = f"{unique_name}_blurred.mp4"
+    output_gif = f"{unique_name}.gif"
     await file.download_to_drive(input_path)
 
     width, height = 320, 240
-    start, end = 0, 5  # أول 5 ثواني
     max_size = 5  # ميجابايت
 
     try:
-        base_clip = add_blur_background(input_path, width, height)
-        sub_clip = base_clip.subclip(start, end)
-        fps, size = convert_to_gif(sub_clip, output_path, max_size)
+        add_blur_background(input_path, width, height, blurred_path)
+        fps, size = convert_to_gif(blurred_path, output_gif, max_size)
 
-        with open(output_path, 'rb') as gif_file:
+        with open(output_gif, 'rb') as gif_file:
             await update.message.reply_animation(gif_file, caption=f"✅ تم الإنشاء بحجم {size:.2f}MB وFPS={fps}")
 
     except Exception as e:
         await update.message.reply_text(f"حدث خطأ أثناء المعالجة: {e}")
 
     finally:
-        if os.path.exists(input_path):
-            os.remove(input_path)
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        for path in [input_path, blurred_path, output_gif]:
+            if os.path.exists(path):
+                os.remove(path)
 
 if __name__ == '__main__':
     BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
