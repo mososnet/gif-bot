@@ -1,8 +1,4 @@
-moviepy==2.2.1
-imageio==2.33.1
-imageio-ffmpeg==0.4.9
-decorator==5.1.1
-tqdm==4.66.1
 opencv-python-headless
 python-telegram-bot==20.3
 python-dotenv
+imageio-ffmpeg
