@@ -1,7 +1,7 @@
 import os
 import tempfile
 import cv2
-from moviepy.editor import VideoFileClip, CompositeVideoClip
+import moviepy.editor as mpy
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 
@@ -9,7 +9,7 @@ UPLOAD_FOLDER = 'static/gifs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def add_blur_background(video_path, width, height):
-    clip = VideoFileClip(video_path)
+    clip = mpy.VideoFileClip(video_path)
 
     if clip.h <= clip.w:
         return clip.resize(newsize=(width, height))  # فيديو عرضي، نعدله فقط
@@ -22,13 +22,13 @@ def add_blur_background(video_path, width, height):
     bg_path = temp_img.replace("frame.jpg", "blur.jpg")
     cv2.imwrite(bg_path, blur)
 
-    bg_clip = (VideoFileClip(bg_path)
+    bg_clip = (mpy.VideoFileClip(bg_path)
                .set_duration(clip.duration)
                .resize((width, height)))
 
     fg_clip = clip.resize(height=height).set_position("center")
 
-    final = CompositeVideoClip([bg_clip, fg_clip])
+    final = mpy.CompositeVideoClip([bg_clip, fg_clip])
     return final
 
 def convert_to_gif(clip, output_path, max_size_mib):
@@ -51,18 +51,15 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("أرسل فيديو فقط.")
         return
 
+    # تحميل الفيديو مؤقتًا
     file_id = video.file_id
     file = await context.bot.get_file(file_id)
-
-    # إنشاء أسماء ملفات مؤقتة فقط
-    tmp_dir = tempfile.gettempdir()
-    unique_prefix = next(tempfile._get_candidate_names())  # اسم فريد
-
-    input_path = os.path.join(tmp_dir, f"{unique_prefix}.mp4")
-    output_path = os.path.join(tmp_dir, f"{unique_prefix}.gif")
-
+    unique_name = tempfile.NamedTemporaryFile(delete=True).name
+    input_path = f"{unique_name}.mp4"
+    output_path = f"{unique_name}.gif"
     await file.download_to_drive(input_path)
 
+    # معطيات افتراضية، ممكن تغيرها أو تخلي المستخدم يحددها لاحقاً
     width, height = 320, 240
     start, end = 0, 5  # أول 5 ثواني
     max_size = 5  # ميجابايت
@@ -79,12 +76,15 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حدث خطأ أثناء المعالجة: {e}")
 
     finally:
+        # حذف الملفات المؤقتة
         if os.path.exists(input_path):
             os.remove(input_path)
         if os.path.exists(output_path):
             os.remove(output_path)
 
 if __name__ == '__main__':
+    from telegram.ext import ApplicationBuilder
+
     BOT_TOKEN = "YOUR_BOT_TOKEN"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
